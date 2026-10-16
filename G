@@ -1,0 +1,1884 @@
+getgenv().config = getgenv().config or {
+    animationpack = false,
+    antimod = false,
+    control = {
+        cframespeed = 2,
+        flyspeed = 30,
+    }
+}
+
+if getgenv().config.animationpack then
+    loadstring(game:HttpGet('https://raw.githubusercontent.com/Vcsk/RobloxScripts/main/DaHood/AnimationPack.lua'))()
+end
+
+game:GetService('StarterGui'):SetCore('SendNotification', {
+    Title = 'Neck Grabs V3',
+    Text = 'Loaded: ' .. game.Players.LocalPlayer.Name,
+    Icon = 'rbxthumb://type=Asset&id=129158822701051&w=150&h=150',
+    Duration = 5,
+})
+
+local _ReplicatedStorage = game:GetService('ReplicatedStorage')
+local RunService = game:GetService('RunService')
+local TweenService = game:GetService('TweenService')
+local Lighting = game:GetService('Lighting')
+local Debris = game:GetService('Debris')
+local LP = game.Players.LocalPlayer
+local u19 = nil
+local u20 = nil
+local u21 = nil
+local u22 = {}
+local u23 = nil
+local INF = math.huge
+
+workspace.FallenPartsDestroyHeight = -INF
+
+local BODY_PARTS = {
+    'Head','HumanoidRootPart','UpperTorso','LowerTorso',
+    'LeftUpperArm','LeftLowerArm','RightUpperArm','RightLowerArm',
+    'LeftHand','RightHand','LeftUpperLeg','LeftLowerLeg',
+    'RightUpperLeg','RightLowerLeg','LeftFoot','RightFoot'
+}
+
+-- ════════════════════════════════════════════════
+-- CLIENTSIDE GRAB SYSTEM
+-- ════════════════════════════════════════════════
+
+local isClientside = false
+local csVictim = nil
+local csWeld = nil
+local csConn = nil
+
+local function HasNativeGrab()
+    local char = LP.Character
+    if not char then return false end
+    local be = char:FindFirstChild('BodyEffects')
+    return be and be:FindFirstChild('Grabbed') ~= nil
+end
+
+local function HasMainEvent()
+    return _ReplicatedStorage:FindFirstChild('MainEvent') ~= nil
+end
+
+local function EnsureGrabbedValue()
+    local char = LP.Character
+    if not char then return end
+    if not char:FindFirstChild('BodyEffects') then
+        local be = Instance.new('Folder'); be.Name = 'BodyEffects'; be.Parent = char
+    end
+    local be = char.BodyEffects
+    if not be:FindFirstChild('Grabbed') then
+        local v = Instance.new('ObjectValue'); v.Name = 'Grabbed'; v.Parent = be
+    end
+end
+
+local function FindNearestPlayer(maxDist)
+    maxDist = maxDist or 20
+    local myHRP = LP.Character and LP.Character:FindFirstChild('HumanoidRootPart')
+    if not myHRP then return nil end
+    local best, bestDist = nil, maxDist
+    for _, p in pairs(game.Players:GetPlayers()) do
+        if p ~= LP and p.Character and p.Character:FindFirstChild('HumanoidRootPart') then
+            local d = (p.Character.HumanoidRootPart.Position - myHRP.Position).Magnitude
+            if d < bestDist then bestDist = d; best = p.Character end
+        end
+    end
+    return best
+end
+
+local function ClientsideGrab(targetChar)
+    if not targetChar then return false end
+    local char = LP.Character
+    if not char then return false end
+    isClientside = true
+    csVictim = targetChar
+    EnsureGrabbedValue()
+    char.BodyEffects.Grabbed.Value = targetChar
+    u19 = targetChar
+    -- disable ragdoll on victim clientside
+    for _, v in pairs(targetChar:GetDescendants()) do
+        if v:IsA('BallSocketConstraint') or v:IsA('HingeConstraint') or v:IsA('RopeConstraint') then
+            pcall(function() v.Enabled = false end)
+        end
+        if v:IsA('BasePart') then v.CanCollide = false end
+    end
+    -- lock victim in place with a loop
+    if csConn then csConn:Disconnect() end
+    csConn = RunService.Heartbeat:Connect(function()
+        if not csVictim or not csVictim.Parent then
+            csConn:Disconnect(); return
+        end
+        local myHRP = char:FindFirstChild('HumanoidRootPart')
+        local vHRP = targetChar:FindFirstChild('HumanoidRootPart')
+        if myHRP and vHRP then
+            ZeroVelocity___(vHRP)
+        end
+    end)
+    return true
+end
+
+local function ClientsideRelease()
+    if not isClientside then return end
+    isClientside = false
+    if csConn then csConn:Disconnect(); csConn = nil end
+    local char = LP.Character
+    if char then
+        EnsureGrabbedValue()
+        char.BodyEffects.Grabbed.Value = nil
+    end
+    if csVictim then
+        for _, v in pairs(csVictim:GetDescendants()) do
+            if v:IsA('BallSocketConstraint') or v:IsA('HingeConstraint') then
+                pcall(function() v.Enabled = true end)
+            end
+        end
+    end
+    csVictim = nil
+end
+
+-- ════════════════════════════════════════════════
+-- FIRE MAIN (native + clientside fallback)
+-- ════════════════════════════════════════════════
+
+function FireMain(...)
+    local ev = _ReplicatedStorage:FindFirstChild('MainEvent')
+    if ev then
+        pcall(ev.FireServer, ev, ...)
+    else
+        local args = {...}
+        local action = args[1]
+        if action == 'Grabbing' then
+            local val = args[2]
+            if val == true then
+                -- grab: handled by ClientsideGrab in Activate tool
+            else
+                -- release
+                ClientsideRelease()
+            end
+        end
+    end
+end
+
+-- ════════════════════════════════════════════════
+-- CORE UTILITIES
+-- ════════════════════════════════════════════════
+
+function ZeroVelocity___(p38)
+    if not p38 or not p38.Parent then return end
+    p38.Velocity = Vector3.zero
+    p38.AssemblyAngularVelocity = Vector3.zero
+    p38.AssemblyLinearVelocity = Vector3.zero
+end
+
+local function u27(p24, p25, p26)
+    p24.AssemblyLinearVelocity = Vector3.new(0,0,0)
+    p24.AssemblyAngularVelocity = Vector3.new(0,0,0)
+    p24.Velocity = Vector3.new(0,0,0)
+    p24.CFrame = p25.CFrame * (p26 or CFrame.new())
+    p24.CanCollide = false
+    p25.CanCollide = false
+end
+
+local function u31(p29, p30)
+    if type(p29) == 'table' and p30 then p29[#p29+1] = p30 end
+end
+
+local function u37(p32, p33)
+    if RunService[p32] then
+        local u34
+        u34 = RunService[p32]:Connect(function()
+            local v35, v36 = pcall(p33)
+            if not v35 then u34:Disconnect(); warn(v36) end
+        end)
+        return u34
+    end
+end
+
+local u28 = {2788309317,2788309982,2788311138,2788308661}
+
+-- ════════════════════════════════════════════════
+-- ANIMATION HELPERS
+-- ════════════════════════════════════════════════
+
+function AnimPlay(p43, p44, p45, p46)
+    local char = LP.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass('Humanoid')
+    if not hum then return end
+    for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+        if t.Animation.AnimationId:match('rbxassetid://' .. tostring(p43)) then t:Stop(0.5) end
+    end
+    local a = Instance.new('Animation', workspace)
+    a.AnimationId = 'rbxassetid://' .. tostring(p43)
+    playing = hum:LoadAnimation(a)
+    playing.Priority = Enum.AnimationPriority.Action4
+    if tonumber(p46) then playing:Play(p46) else playing:Play() end
+    if tonumber(p44) then playing:AdjustSpeed(p44) else playing:AdjustSpeed(1) end
+    if tonumber(p45) then playing.TimePosition = p45 end
+    a:Destroy()
+end
+
+function AnimPlayvv2(p52, p53, p54, p55)
+    local char = LP.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass('Humanoid')
+    if not hum then return end
+    for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+        if t.Animation.AnimationId:match('rbxassetid://' .. tostring(p52)) then t:Stop() end
+    end
+    local a = Instance.new('Animation', workspace)
+    a.AnimationId = 'rbxassetid://' .. tostring(p52)
+    playing = hum:LoadAnimation(a)
+    if tonumber(p55) then playing:Play(p55) else playing:Play() end
+    if tonumber(p53) then playing:AdjustSpeed(p53) else playing:AdjustSpeed(1) end
+    if tonumber(p54) then playing.TimePosition = p54 end
+    a:Destroy()
+end
+
+function AnimStopv2(p61, p62)
+    local char = LP.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass('Humanoid')
+    if not hum then return end
+    for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+        if t.Animation.AnimationId:match('rbxassetid://' .. tostring(p61)) then
+            if tonumber(p62) then t:Stop(p62) else t:Stop() end
+        end
+    end
+end
+
+function CloneStopanim(p67, p68)
+    if not u21 then return end
+    local hum = u21:FindFirstChildOfClass('Humanoid')
+    if not hum then return end
+    for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+        if t.Animation.AnimationId:match('rbxassetid://' .. tostring(p67)) then
+            if tonumber(p68) then t:Stop(p68) else t:Stop() end
+        end
+    end
+end
+
+function AnimStop(p108, p109)
+    AnimStopv2(p108, p109)
+end
+
+local function u84(p73)
+    if not u21 then return end
+    local lhum = LP.Character and LP.Character:FindFirstChildOfClass('Humanoid')
+    if not lhum then return end
+    for _, t in pairs(lhum:GetPlayingAnimationTracks()) do
+        if t.Animation.AnimationId:match('rbxassetid://' .. tostring(p73)) then
+            t:Stop()
+            if not u21:FindFirstChild(tostring(p73)) then
+                local a = Instance.new('Animation', u21)
+                a.AnimationId = 'rbxassetid://' .. p73
+                a.Name = '_____GYAT'
+                local tr = u21.Humanoid:LoadAnimation(a)
+                tr:Play()
+            end
+        end
+    end
+    if u21.Humanoid.MoveDirection.Magnitude > 0 then
+        CloneStopanim(p73)
+        for _, c in pairs(u21:GetChildren()) do
+            if c.Name == '_____GYAT' then c:Destroy() end
+        end
+    end
+end
+
+local function u92(p85, p86)
+    if not u21 then return end
+    local hum = u21:FindFirstChildOfClass('Humanoid')
+    if not hum then return end
+    for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+        if t.Animation.AnimationId:match('rbxassetid://' .. tostring(p85)) then t:Stop(); return end
+    end
+    local a = Instance.new('Animation', workspace)
+    a.AnimationId = 'rbxassetid://' .. tostring(p85)
+    playing = hum:LoadAnimation(a); playing:Play()
+    if tonumber(p86) then playing:AdjustSpeed(p86) else playing:AdjustSpeed(1) end
+    a:Destroy()
+end
+
+local function u100(p93, p94)
+    if not u21 then return end
+    local hum = u21:FindFirstChildOfClass('Humanoid')
+    if not hum then return end
+    for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+        if t.Animation.AnimationId:match('rbxassetid://' .. tostring(p93)) then t:Stop() end
+    end
+    local a = Instance.new('Animation', workspace)
+    a.AnimationId = 'rbxassetid://' .. tostring(p93)
+    playing = hum:LoadAnimation(a); playing:Play()
+    if tonumber(p94) then playing:AdjustSpeed(p94) else playing:AdjustSpeed(1) end
+    a:Destroy()
+end
+
+-- ════════════════════════════════════════════════
+-- ALIGN SYSTEM (original del script viejo)
+-- ════════════════════════════════════════════════
+
+function Align(p137, p138, p139, p140, p141, p142)
+    local char = LP.Character
+    if not char then return end
+    EnsureGrabbedValue()
+    if char.BodyEffects.Grabbed.Value == nil then return end
+    if not u19 or not u19.Parent then return end
+    local target = u19:FindFirstChild(p139)
+    if not target then return end
+    if not (target:FindFirstChildWhichIsA('BodyPosition') or target:FindFirstChildWhichIsA('BodyGyro')) then
+        local bp = Instance.new('BodyPosition', target)
+        bp.MaxForce = Vector3.new(INF,INF,INF)
+        local bg = Instance.new('BodyGyro', target)
+        bg.maxTorque = Vector3.new(9e9,9e9,9e9); bg.P = 10000
+    end
+    local anchor = char:FindFirstChild(p140)
+    if not anchor then return end
+    local bp = target:FindFirstChildWhichIsA('BodyPosition')
+    local bg = target:FindFirstChildWhichIsA('BodyGyro')
+    if bg then bg.CFrame = anchor.CFrame * p142 end
+    if bp then
+        bp.Position = anchor.CFrame * p141.Position
+        bp.P = p137; bp.D = p138
+    end
+end
+
+function Destroy(p144)
+    if not u19 then return end
+    local t = u19:FindFirstChild(p144)
+    if not t then return end
+    local bp = t:FindFirstChildOfClass('BodyGyro')
+    local bg = t:FindFirstChildOfClass('BodyPosition')
+    if bp then bp:Destroy() end
+    if bg then bg:Destroy() end
+end
+
+-- ════════════════════════════════════════════════
+-- CLONE BUILDER
+-- ════════════════════════════════════════════════
+
+local function u107(p101)
+    p101.Archivable = true
+    local v102 = p101:Clone()
+    v102.HumanoidRootPart.Anchored = false
+    v102.Humanoid.MaxHealth = 9e9; v102.Humanoid.Health = 9e9
+    pcall(function() v102.RagdollConstraints:Destroy() end)
+    pcall(function() v102.BodyEffects:Destroy() end)
+    pcall(function() v102:WaitForChild('GRABBING_CONSTRAINT',2):Destroy() end)
+    for _, v in pairs(v102:GetDescendants()) do
+        local isBody = false
+        for _, bp in ipairs(BODY_PARTS) do if v.Name == bp then isBody = true; break end end
+        if v:IsA('BasePart') and not isBody then
+            v.Massless = false; v:Destroy()
+        elseif v:IsA('BasePart') or v:IsA('MeshPart') or v:IsA('Part') then
+            v.CustomPhysicalProperties = PhysicalProperties.new(100,2,0.5,100,1)
+            v.Transparency = 1; v.CanCollide = false
+            if v:FindFirstChildWhichIsA('BodyGyro') and v:FindFirstChildWhichIsA('BodyPosition') then v:Destroy() end
+        elseif v:IsA('Decal') then v.Transparency = 1
+        elseif v:IsA('ForceField') then v:Destroy()
+        elseif v:IsA('Motor6D') then v:Destroy()
+        end
+    end
+    v102.HumanoidRootPart.Transparency = 1
+    v102.Parent = LP.Character
+    v102.Humanoid:ChangeState('GettingUp')
+    v102.HumanoidRootPart.CFrame = LP.Character.HumanoidRootPart.CFrame
+    p101.Archivable = false
+    for _, name in ipairs({'LeftHand','RightHand','LeftFoot','RightFoot'}) do
+        local m = p101[name]:FindFirstChildOfClass('Motor6D')
+        if m then m.Enabled = false end
+    end
+    return v102
+end
+
+-- ════════════════════════════════════════════════
+-- HOLDING + GRAB (originales del script viejo)
+-- ════════════════════════════════════════════════
+
+function Holding()
+    repeat
+        task.wait()
+        Align(10000, 175, 'UpperTorso', 'RightUpperArm',
+            CFrame.new(-0.2,-1.7,0.5),
+            CFrame.Angles(math.pi*-0.5, math.pi*1, math.pi*0.07))
+    until LP.Character.BodyEffects.Grabbed.Value == nil or u20 == true
+end
+
+function Grab()
+    EnsureGrabbedValue()
+    if LP.Character.BodyEffects.Grabbed.Value then
+        u19 = LP.Character.BodyEffects.Grabbed.Value
+        local gc = u19:FindFirstChild('GRABBING_CONSTRAINT')
+        if gc then
+            u23 = gc:FindFirstChildOfClass('RopeConstraint')
+            if u23 then u23.Length = INF end
+        end
+        u20 = false
+        for _, v in pairs(u19:GetChildren()) do
+            if v:IsA('BasePart') then v.CanCollide = false end
+        end
+        -- si es clientside, skip la espera de animacion nativa
+        if isClientside then
+            for _, v in pairs(u19:GetDescendants()) do
+                if v:IsA('BasePart') then ZeroVelocity___(v) end
+            end
+            u20 = false
+            AnimPlayvv2(3135389157, 0, 0.1, 0.3)
+            Holding()
+            AnimStopv2(3135389157)
+            Destroy('UpperTorso')
+            return
+        end
+        while true do
+            task.wait()
+            local hum = LP.Character:FindFirstChildOfClass('Humanoid')
+            if not hum then break end
+            for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+                if t.Animation.AnimationId:match('11075367458') then
+                    u20 = true; t:Stop()
+                end
+            end
+            if u20 then break end
+            if LP.Character.BodyEffects.Grabbed.Value == nil then return end
+        end
+        for _, v in pairs(u19:GetDescendants()) do
+            if v:IsA('BasePart') then ZeroVelocity___(v) end
+        end
+        u20 = false
+        AnimPlayvv2(3135389157, 0, 0.1, 0.3)
+        Holding()
+        AnimStopv2(3135389157)
+        Destroy('UpperTorso')
+    end
+end
+
+-- ════════════════════════════════════════════════
+-- VFX HELPERS
+-- ════════════════════════════════════════════════
+
+local function ShockwaveRing(pos, color, maxSize, duration)
+    local p = Instance.new('Part', workspace)
+    p.Size = Vector3.new(1,0.5,1); p.Color = color
+    p.Material = Enum.Material.Neon; p.Anchored = true
+    p.CanCollide = false; p.Shape = Enum.PartType.Cylinder
+    p.CFrame = CFrame.new(pos) * CFrame.Angles(0,0,math.pi/2)
+    TweenService:Create(p, TweenInfo.new(duration or 0.5), {
+        Size = Vector3.new(maxSize,0.5,maxSize), Transparency = 1
+    }):Play()
+    Debris:AddItem(p, duration or 0.5)
+end
+
+local function NeonSphere(pos, color, size, lifetime)
+    local p = Instance.new('Part', workspace)
+    p.Shape = Enum.PartType.Ball; p.Size = Vector3.new(size,size,size)
+    p.Color = color; p.Material = Enum.Material.Neon
+    p.Anchored = true; p.CanCollide = false
+    p.CFrame = CFrame.new(pos); Debris:AddItem(p, lifetime or 2)
+    return p
+end
+
+local function SlashEffect(pos, color)
+    for i = 1, 3 do
+        local p = Instance.new('Part', workspace)
+        p.Size = Vector3.new(0.2,8,0.2); p.Color = color
+        p.Material = Enum.Material.Neon; p.Anchored = true; p.CanCollide = false
+        p.CFrame = CFrame.new(pos) * CFrame.Angles(0, math.rad(i*60), math.rad(20))
+        TweenService:Create(p, TweenInfo.new(0.4), {
+            Size = Vector3.new(0.2,1,0.2), Transparency = 1,
+            CFrame = p.CFrame * CFrame.new(0,5,0)
+        }):Play()
+        Debris:AddItem(p, 0.4)
+    end
+end
+
+local function HighlightVictim(char, color, dur)
+    if not char then return end
+    local h = Instance.new('Highlight', char)
+    h.OutlineColor = color; h.FillColor = Color3.new(0,0,0)
+    h.FillTransparency = 0.5; Debris:AddItem(h, dur or 3)
+    return h
+end
+
+local function EnergyPillar(pos, color, height, width, lifetime)
+    local p = Instance.new('Part', workspace)
+    p.Size = Vector3.new(width or 4, height or 20, width or 4)
+    p.Color = color; p.Material = Enum.Material.Neon
+    p.Anchored = true; p.CanCollide = false
+    p.CFrame = CFrame.new(pos); Debris:AddItem(p, lifetime or 3)
+    return p
+end
+
+local function TweenLighting(props, dur)
+    TweenService:Create(Lighting, TweenInfo.new(dur or 0.7), props):Play()
+end
+
+local function DismemberVictim(char, y)
+    y = y or -1200
+    if not char then return end
+    for _, name in ipairs({'RightUpperArm','LeftUpperArm','RightUpperLeg','LeftUpperLeg'}) do
+        local p = char:FindFirstChild(name)
+        if p then p.CFrame = CFrame.new(0, y, 0) end
+    end
+end
+
+-- ════════════════════════════════════════════════
+-- FLY CLONE
+-- ════════════════════════════════════════════════
+
+_G.FlyClone = false
+
+RunService.RenderStepped:Connect(function(dt)
+    if not _G.FlyClone then return end
+    if not u21 or not u21:FindFirstChild('HumanoidRootPart') then return end
+    local spd = getgenv().config.control.flyspeed
+    local dir = u21.Humanoid.MoveDirection
+    local hrp = u21.HumanoidRootPart
+    local UIS = game:GetService('UserInputService')
+    local upDown = Vector3.zero
+    if UIS:IsKeyDown(Enum.KeyCode.Space) then upDown = Vector3.yAxis
+    elseif UIS:IsKeyDown(Enum.KeyCode.LeftShift) then upDown = -Vector3.yAxis end
+    hrp.CFrame = hrp.CFrame + dir*dt*spd*6 + upDown*dt*spd*2
+    hrp.Velocity = Vector3.new(hrp.Velocity.X, 0, hrp.Velocity.Z)
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        local char = LP.Character
+        if char then
+            EnsureGrabbedValue()
+            local be = char:FindFirstChild('BodyEffects')
+            if be and be:FindFirstChild('Grabbed') and be.Grabbed.Value == nil then
+                _G.FlyClone = false
+            end
+        end
+    end
+end)
+
+-- ════════════════════════════════════════════════
+-- CLONE KEYBINDS
+-- ════════════════════════════════════════════════
+
+local function u127()
+    local u114 = nil
+    u31(u22, LP:GetMouse().KeyDown:Connect(function(p115)
+        if p115 == 'v' then
+            u92(7024352298)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(7024352298)
+        elseif p115 == 'q' then
+            u92(10370362157, 1.1)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(10370362157)
+        elseif p115 == 't' then
+            u92(10714068222)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(10714068222)
+        elseif p115 == 'y' then
+            u92(507770818)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(507770818)
+        elseif p115 == 'u' then
+            u92(10714340543, 1.3)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(10714340543)
+        elseif p115 == 'j' then
+            u92(14548619594)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(14548619594)
+        elseif p115 == 'e' then u92(2816431506, 1.5)
+        elseif p115 == 'r' then
+            u92(11444443576, 1.1)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(11444443576)
+        elseif p115 == 'b' then
+            u92(10214314957)
+            repeat task.wait() until LP.Character.Humanoid.MoveDirection.Magnitude > 0
+            CloneStopanim(10214314957)
+        elseif p115 == '2' then u100(3152394906)
+        elseif p115 == 'f' then u100(2788354405)
+        elseif p115 == '0' then if u21 then u21.Humanoid.WalkSpeed = 24 end
+        elseif p115 == 'c' then _G.FlyClone = not _G.FlyClone
+        elseif p115 == 'x' then
+            u114 = not u114
+            if u114 then
+                u92(3189777795)
+                repeat
+                    task.wait()
+                    if u21 then
+                        u21.HumanoidRootPart.CFrame = u21.HumanoidRootPart.CFrame + u21.Humanoid.MoveDirection * getgenv().config.control.cframespeed
+                    end
+                until u114 == false
+            end
+        end
+    end))
+    u31(u22, LP:GetMouse().KeyUp:Connect(function(k)
+        if k == '2' then CloneStopanim(3152394906)
+        elseif k == 'f' then CloneStopanim(2788354405)
+        elseif k == '0' then if u21 then u21.Humanoid.WalkSpeed = 16 end
+        end
+    end))
+    local combat = LP.Backpack:FindFirstChild('Combat')
+    if combat then
+        u31(u22, combat.Activated:Connect(function()
+            u100(u28[math.random(1,#u28)], 1.3)
+        end))
+    end
+    repeat task.wait()
+    until LP.Character.BodyEffects.Grabbed.Value == nil or u20 == true
+    LP.Character.HumanoidRootPart.CFrame = u21.HumanoidRootPart.CFrame
+    ZeroVelocity___(LP.Character.HumanoidRootPart)
+    workspace.CurrentCamera.CameraSubject = LP.Character
+    u21:Destroy()
+    for _, v in pairs(u19:GetDescendants()) do if v:IsA('BodyPosition') then v:Destroy() end end
+    for _, v in pairs(u22) do v:Disconnect() end
+    for _, name in ipairs({'LeftHand','RightHand','LeftFoot','RightFoot'}) do
+        local p = u19:FindFirstChild(name)
+        if p then local m = p:FindFirstChildOfClass('Motor6D'); if m then m.Enabled = true end end
+    end
+end
+
+-- ════════════════════════════════════════════════
+-- TOOL FACTORY
+-- ════════════════════════════════════════════════
+
+local function MakeTool(name)
+    for _, loc in ipairs({LP.Backpack, LP.Character}) do
+        local old = loc and loc:FindFirstChild(name)
+        if old then old:Destroy() end
+    end
+    task.wait(0.1)
+    local t = Instance.new('Tool')
+    t.RequiresHandle = false; t.Name = name; t.Parent = LP.Backpack
+    return t
+end
+
+-- ════════════════════════════════════════════════
+-- GUI
+-- ════════════════════════════════════════════════
+
+local function CreateGUI()
+    if LP.PlayerGui:FindFirstChild('NeckGrabsGUI') then
+        LP.PlayerGui.NeckGrabsGUI:Destroy()
+    end
+    local SG = Instance.new('ScreenGui')
+    SG.Name = 'NeckGrabsGUI'; SG.ResetOnSpawn = false
+    SG.Parent = LP.PlayerGui
+
+    local MF = Instance.new('Frame')
+    MF.Size = UDim2.new(0,220,0,400); MF.Position = UDim2.new(0,10,0.5,-200)
+    MF.BackgroundColor3 = Color3.fromRGB(20,20,20); MF.BorderSizePixel = 0; MF.Parent = SG
+
+    Instance.new('UICorner', MF).CornerRadius = UDim.new(0,8)
+    local st = Instance.new('UIStroke', MF); st.Color = Color3.fromRGB(100,0,200); st.Thickness = 2
+
+    local Title = Instance.new('TextLabel')
+    Title.Size = UDim2.new(1,0,0,35); Title.BackgroundColor3 = Color3.fromRGB(100,0,200)
+    Title.Text = '🔥 NECK GRABS V3'; Title.TextColor3 = Color3.new(1,1,1)
+    Title.TextScaled = true; Title.Font = Enum.Font.GothamBold
+    Title.BorderSizePixel = 0; Title.Parent = MF
+    Instance.new('UICorner', Title).CornerRadius = UDim.new(0,8)
+
+    -- Status label
+    local StatusLbl = Instance.new('TextLabel')
+    StatusLbl.Size = UDim2.new(1,0,0,18); StatusLbl.Position = UDim2.new(0,0,0,36)
+    StatusLbl.BackgroundTransparency = 1; StatusLbl.Text = '⚫ Sin agarre'
+    StatusLbl.TextColor3 = Color3.fromRGB(180,180,180); StatusLbl.TextScaled = true
+    StatusLbl.Font = Enum.Font.Gotham; StatusLbl.Parent = MF
+
+    local function UpdateStatus(txt, color)
+        StatusLbl.Text = txt; StatusLbl.TextColor3 = color
+    end
+
+    -- Drag
+    local dragging, dragStart, startPos
+    Title.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; dragStart = inp.Position; startPos = MF.Position
+        end
+    end)
+    game:GetService('UserInputService').InputChanged:Connect(function(inp)
+        if dragging then
+            local d = inp.Position - dragStart
+            MF.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset+d.X, startPos.Y.Scale, startPos.Y.Offset+d.Y)
+        end
+    end)
+    game:GetService('UserInputService').InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    local SF = Instance.new('ScrollingFrame')
+    SF.Size = UDim2.new(1,-10,1,-112); SF.Position = UDim2.new(0,5,0,57)
+    SF.BackgroundTransparency = 1; SF.ScrollBarThickness = 4
+    SF.ScrollBarImageColor3 = Color3.fromRGB(100,0,200); SF.BorderSizePixel = 0; SF.Parent = MF
+
+    local LL = Instance.new('UIListLayout', SF)
+    LL.SortOrder = Enum.SortOrder.LayoutOrder; LL.Padding = UDim.new(0,4)
+    local PP = Instance.new('UIPadding', SF); PP.PaddingTop = UDim.new(0,4)
+
+    local function AddBtn(name, order)
+        local btn = Instance.new('TextButton')
+        btn.Size = UDim2.new(1,-10,0,28); btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+        btn.Text = name; btn.TextColor3 = Color3.new(1,1,1); btn.TextScaled = true
+        btn.Font = Enum.Font.Gotham; btn.BorderSizePixel = 0; btn.LayoutOrder = order; btn.Parent = SF
+        Instance.new('UICorner', btn).CornerRadius = UDim.new(0,5)
+        btn.MouseEnter:Connect(function() btn.BackgroundColor3 = Color3.fromRGB(80,0,160) end)
+        btn.MouseLeave:Connect(function() btn.BackgroundColor3 = Color3.fromRGB(40,40,40) end)
+        btn.Activated:Connect(function()
+            local tool = LP.Character and LP.Character:FindFirstChild(name)
+                or LP.Backpack:FindFirstChild(name)
+            if tool and not LP.Character:FindFirstChild(name) then
+                tool.Parent = LP.Character
+            end
+        end)
+    end
+
+    local tools = {
+        'Activate','Throw','Floar Slam','Hado 90','C Moon',
+        'Portal','Clone','BoomHeadShot','Heaven Throw','Domain Expansion',
+        'Made in Heaven','Get Over Here','Head Breaker','Hell','Idk',
+        'fly punch','Boxing','Bat Knock','Crusher','Knife Killer',
+        'Combo','Stand','Rip In Half','Punch','Control',
+        'Sans Final Attack','Kamehameha','Saitama',
+        'Domain Gojo','Domain Sukuna','Low Cortisol',
+        'Otsukare Summer','Hollow Nuke','Hollow Purple','Malevolent Shrine'
+    }
+    for i, name in ipairs(tools) do AddBtn(name, i) end
+
+    LL:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
+        SF.CanvasSize = UDim2.new(0,0,0,LL.AbsoluteContentSize.Y+8)
+    end)
+    SF.CanvasSize = UDim2.new(0,0,0,LL.AbsoluteContentSize.Y+8)
+
+    local BF = Instance.new('Frame')
+    BF.Size = UDim2.new(1,0,0,52); BF.Position = UDim2.new(0,0,1,-54)
+    BF.BackgroundTransparency = 1; BF.Parent = MF
+
+    local ABtn = Instance.new('TextButton')
+    ABtn.Size = UDim2.new(0.48,0,1,-6); ABtn.Position = UDim2.new(0.01,0,0,3)
+    ABtn.BackgroundColor3 = Color3.fromRGB(0,160,0); ABtn.Text = '✅ ACTIVATE'
+    ABtn.TextColor3 = Color3.new(1,1,1); ABtn.TextScaled = true
+    ABtn.Font = Enum.Font.GothamBold; ABtn.BorderSizePixel = 0; ABtn.Parent = BF
+    Instance.new('UICorner', ABtn).CornerRadius = UDim.new(0,6)
+
+    local RBtn = Instance.new('TextButton')
+    RBtn.Size = UDim2.new(0.48,0,1,-6); RBtn.Position = UDim2.new(0.51,0,0,3)
+    RBtn.BackgroundColor3 = Color3.fromRGB(200,0,0); RBtn.Text = '❌ RELEASE'
+    RBtn.TextColor3 = Color3.new(1,1,1); RBtn.TextScaled = true
+    RBtn.Font = Enum.Font.GothamBold; RBtn.BorderSizePixel = 0; RBtn.Parent = BF
+    Instance.new('UICorner', RBtn).CornerRadius = UDim.new(0,6)
+
+    ABtn.Activated:Connect(function()
+        local tool = LP.Backpack:FindFirstChild('Activate')
+        if tool then
+            tool.Parent = LP.Character
+            UpdateStatus('🟢 Agarrando...', Color3.fromRGB(0,220,0))
+            ABtn.BackgroundColor3 = Color3.fromRGB(0,100,0)
+            task.delay(0.8, function() ABtn.BackgroundColor3 = Color3.fromRGB(0,160,0) end)
+        end
+    end)
+
+    RBtn.Activated:Connect(function()
+        EnsureGrabbedValue()
+        FireMain('Grabbing')
+        LP.Character.BodyEffects.Grabbed.Value = nil
+        if isClientside then ClientsideRelease() end
+        UpdateStatus('⚫ Sin agarre', Color3.fromRGB(180,180,180))
+        RBtn.BackgroundColor3 = Color3.fromRGB(100,0,0)
+        task.delay(0.5, function() RBtn.BackgroundColor3 = Color3.fromRGB(200,0,0) end)
+    end)
+
+    -- update status automatico
+    task.spawn(function()
+        while SG.Parent do
+            task.wait(0.3)
+            local char = LP.Character
+            if char then
+                EnsureGrabbedValue()
+                local be = char:FindFirstChild('BodyEffects')
+                local g = be and be:FindFirstChild('Grabbed')
+                if g and g.Value then
+                    local mode = isClientside and ' (CS)' or ' (Native)'
+                    UpdateStatus('🟢 Holding' .. mode, Color3.fromRGB(0,220,0))
+                else
+                    UpdateStatus('⚫ Sin agarre', Color3.fromRGB(180,180,180))
+                end
+            end
+        end
+    end)
+
+    return SG
+end
+
+-- ════════════════════════════════════════════════
+-- TOOLS
+-- ════════════════════════════════════════════════
+
+function ToolSSs()
+    local char = LP.Character
+    if not char then return end
+    EnsureGrabbedValue()
+
+    -- ACTIVATE
+    local tActivate = MakeTool('Activate')
+    tActivate.Activated:Connect(function()
+        if HasMainEvent() and HasNativeGrab() then
+            FireMain('Grabbing', true)
+            task.wait(0.3)
+            Grab()
+        else
+            local target = FindNearestPlayer(20)
+            if not target then return end
+            local ok = ClientsideGrab(target)
+            if ok then
+                task.wait(0.1)
+                Grab()
+            end
+        end
+    end)
+
+    -- THROW
+    local tThrow = MakeTool('Throw')
+    tThrow.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local done = false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-10),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        task.wait(0.6); AnimPlay(10714350889); task.wait(4.5)
+        AnimPlay(10714350889); task.wait(3.4); AnimStopv2(10714350889); AnimPlay(16281379714)
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,15,-10),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        done = true; task.wait(0.2)
+        local vchar = LP.Character.BodyEffects.Grabbed.Value
+        if vchar then local ut = vchar:FindFirstChild('UpperTorso'); if ut then ut.CFrame = CFrame.new(0,-1200,0) end end
+        task.wait(0.3); FireMain('Grabbing'); Destroy('UpperTorso')
+    end)
+
+    -- FLOAR SLAM
+    local tSlam = MakeTool('Floar Slam')
+    tSlam.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        local hum = LP.Character:FindFirstChildOfClass('Humanoid')
+        if not hum then return end
+        for _, t in pairs(hum:GetPlayingAnimationTracks()) do
+            if t.Animation.AnimationId:match('3135389157') then
+                t:Stop()
+                local a = Instance.new('Animation'); a.AnimationId = 'rbxassetid://14228857569'
+                local tr = hum:LoadAnimation(a); tr.Priority = Enum.AnimationPriority.Action; tr:Play(); tr:AdjustSpeed(1)
+                task.wait(0.1)
+                local vchar = LP.Character.BodyEffects.Grabbed.Value
+                if vchar then local ut = vchar:FindFirstChild('UpperTorso'); if ut then ut.CFrame = CFrame.new(0,-7000,0) end end
+                local hrp = LP.Character.HumanoidRootPart
+                for i=1,3 do task.delay(i*0.1,function() ShockwaveRing(hrp.Position,Color3.fromRGB(255,200,50),20+i*10,0.4) end) end
+            end
+        end
+        task.wait(0.7); FireMain('Grabbing', false)
+    end)
+
+    -- HADO 90
+    local tHado = MakeTool('Hado 90')
+    tHado.Activated:Connect(function()
+        EnsureGrabbedValue()
+        local vchar = LP.Character.BodyEffects.Grabbed.Value; if not vchar then return end
+        local vUT = vchar:FindFirstChild('UpperTorso'); if not vUT then return end
+        HighlightVictim(vchar, Color3.fromRGB(170,0,255), 8)
+        local pillar = EnergyPillar(vUT.Position+Vector3.new(0,-50,0),Color3.fromRGB(170,0,255),25,9,10)
+        local tw = TweenService:Create(pillar, TweenInfo.new(1), {CFrame=CFrame.new(vUT.Position+Vector3.new(0,5,0))})
+        tw:Play(); tw.Completed:Wait()
+        ShockwaveRing(vUT.Position,Color3.fromRGB(170,0,255),30,0.6); task.wait(5)
+        vUT.CFrame = CFrame.new(0,-70000,0); task.wait(2)
+        local tw2 = TweenService:Create(pillar,TweenInfo.new(1),{CFrame=CFrame.new(vUT.Position+Vector3.new(0,50,0))})
+        tw2:Play(); tw2.Completed:Wait(); task.wait(1); pillar:Destroy()
+    end)
+
+    -- C MOON
+    local tCMoon = MakeTool('C Moon')
+    tCMoon.Activated:Connect(function()
+        EnsureGrabbedValue()
+        local vchar = LP.Character.BodyEffects.Grabbed.Value; if not vchar then return end
+        local vUT = vchar:FindFirstChild('UpperTorso')
+        if not vUT or not vUT:FindFirstChildWhichIsA('BodyPosition') then return end
+        AnimStopv2(3135389157)
+        local done = false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-2),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        TweenLighting({ColorShift_Bottom=Color3.fromRGB(0,255,0),ColorShift_Top=Color3.fromRGB(0,255,0),Brightness=100},0.7)
+        local a=Instance.new('Animation'); a.AnimationId='rbxassetid://8254789608'
+        local tr=LP.Character.Humanoid:LoadAnimation(a); tr.Priority=Enum.AnimationPriority.Action; tr:Play(); tr:AdjustSpeed(1)
+        for i=1,4 do task.delay(i*0.2,function() ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(0,255,0),15+i*5,0.5) end) end
+        task.wait(0.4)
+        vUT:FindFirstChildWhichIsA('BodyPosition').D=200
+        vUT:FindFirstChildWhichIsA('BodyPosition').Position=LP.Character.HumanoidRootPart.Position+LP.Character.HumanoidRootPart.CFrame.LookVector*3+Vector3.new(0,2000,0)
+        task.wait(0.9); TweenLighting({ColorShift_Bottom=Color3.black,ColorShift_Top=Color3.black,Brightness=1},0.7)
+        FireMain('Grabbing',false); done=true
+    end)
+
+    -- PORTAL
+    local tPortal = MakeTool('Portal')
+    local savedSky = nil
+    for _, obj in ipairs(Lighting:GetChildren()) do if obj:IsA('Sky') then savedSky=obj:Clone(); break end end
+    local portalFX = {}
+    tPortal.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        task.wait(1)
+        local portal = LP.Character:FindFirstChild('Portal'); if portal then portal.Parent=LP.Backpack end
+        u20=true; task.wait(); u20=false
+        local bloom=Instance.new('BloomEffect',Lighting); bloom.Intensity=1.5; bloom.Size=30; bloom.Threshold=1.5
+        local blur=Instance.new('BlurEffect',Lighting); blur.Size=12
+        local cc=Instance.new('ColorCorrectionEffect',Lighting); cc.Tint=Color3.fromRGB(170,170,255); cc.Saturation=-0.4
+        portalFX={bloom,blur,cc}
+        u21=u107(u19); workspace.CurrentCamera.CameraSubject=u21
+        u31(u22, u37('Heartbeat', function()
+            for _, t in pairs(LP.Character.Humanoid:GetPlayingAnimationTracks()) do t:Stop() end
+            LP.Character.HumanoidRootPart.CFrame=u21.HumanoidRootPart.CFrame*CFrame.new(0,-15,0)*CFrame.Angles(math.pi/2,0,0)
+            ZeroVelocity___(LP.Character.HumanoidRootPart)
+            for _, name in ipairs(BODY_PARTS) do
+                local vp=u19:FindFirstChild(name); local cp=u21:FindFirstChild(name)
+                if vp and cp then u27(vp,cp,CFrame.new()) end
+            end
+            for _, id in ipairs({3152375249,3152378852,3189773368,3189776546,3189777795,3189779152,3487719500,11710529975,11710524717,11710527244,11710529220,11710524200,11710541744}) do u84(id) end
+            u127()
+            for _, t in pairs(u21.Humanoid:GetPlayingAnimationTracks()) do
+                if t.Animation.AnimationId:find('3152394906') then t:AdjustSpeed(u21.Humanoid.MoveDirection.Magnitude>0 and 1 or 0) end
+            end
+            u21.Humanoid.Jump=LP.Character.Humanoid.Jump
+            u21.Humanoid:Move(LP.Character.Humanoid.MoveDirection,false)
+        end))
+        local cloudPart=Instance.new('Part',workspace); cloudPart.Size=Vector3.new(50,2,50)
+        cloudPart.Transparency=0.85; cloudPart.Material=Enum.Material.Neon; cloudPart.Color=Color3.fromRGB(200,200,255)
+        cloudPart.Anchored=true; cloudPart.CanCollide=false
+        cloudPart.CFrame=LP.Character.HumanoidRootPart.CFrame+Vector3.new(0,9,0)
+        u92(10714360343,1); AnimPlay(10714360343,1); task.wait(3)
+        task.delay(2,function()
+            workspace.CurrentCamera.CameraType=Enum.CameraType.Scriptable
+            local hrp2=u21 and u21.HumanoidRootPart; if not hrp2 then return end
+            local cp2=Instance.new('Part',workspace); cp2.Size=Vector3.new(1,1,1); cp2.Anchored=true; cp2.CanCollide=false; cp2.Transparency=1; cp2.Position=hrp2.Position
+            Instance.new('Humanoid',cp2); workspace.CurrentCamera.CameraSubject=cp2
+            local ti=TweenInfo.new(4,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut)
+            local tCF=CFrame.new(hrp2.Position+Vector3.new(0,3,15),hrp2.Position)
+            TweenService:Create(workspace.CurrentCamera,ti,{CFrame=tCF}):Play()
+            TweenService:Create(cp2,ti,{CFrame=tCF}):Play(); task.wait(4); cp2:Destroy()
+            TweenService:Create(hrp2,TweenInfo.new(2,Enum.EasingStyle.Sine,Enum.EasingDirection.Out),{CFrame=hrp2.CFrame+Vector3.new(0,10,0)}):Play()
+            task.wait(1.3)
+            local vchar=LP.Character.BodyEffects.Grabbed.Value
+            if vchar then
+                for _, name in ipairs({'RightUpperLeg','LeftUpperLeg','RightUpperArm','LeftUpperArm','UpperTorso'}) do
+                    local p=vchar:FindFirstChild(name)
+                    if p then for _, m in ipairs(p:GetChildren()) do if m:IsA('Motor6D') then m.Enabled=false end end; p.Position=Vector3.new(0,-11000000,0) end
+                    if u21 then local cp3=u21:FindFirstChild(name); if cp3 then for _, m in ipairs(cp3:GetChildren()) do if m:IsA('Motor6D') then m.Enabled=false end end; cp3.Position=Vector3.new(0,-11000000,0) end end
+                end
+            end
+            task.wait(0.7); FireMain('Grabbing')
+            workspace.CurrentCamera.CameraType=Enum.CameraType.Custom
+            workspace.CurrentCamera.CameraSubject=LP.Character:FindFirstChild('Humanoid') or LP.Character:FindFirstChild('HumanoidRootPart')
+            if cloudPart then cloudPart:Destroy() end
+            for _, e in ipairs(portalFX) do if e and e.Parent then e:Destroy() end end; portalFX={}
+            for _, obj in ipairs(Lighting:GetChildren()) do if obj:IsA('Sky') then obj:Destroy() end end
+            if savedSky then savedSky:Clone().Parent=Lighting end
+        end)
+    end)
+
+    -- CLONE
+    local tClone = MakeTool('Clone')
+    tClone.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        u20=true; task.wait(); u20=false; u21=u107(u19)
+        u31(u22, u37('Heartbeat', function()
+            u27(u19.HumanoidRootPart,LP.Character.HumanoidRootPart,CFrame.new(0,0,6))
+            for _, name in ipairs(BODY_PARTS) do
+                local vp=u19:FindFirstChild(name); local cp=u21:FindFirstChild(name)
+                if vp and cp then u27(vp,cp,CFrame.new()) end
+            end
+            for _, id in ipairs({3152375249,3152378852,3189773368,3189776546,3189777795,3189779152,3487719500,11710529975,11710524717,11710527244,11710529220,11710524200,11710541744}) do u84(id) end
+            for _, t in pairs(u21.Humanoid:GetPlayingAnimationTracks()) do
+                if t.Animation.AnimationId:match('rbxassetid://3152394906') then t:AdjustSpeed(u21.Humanoid.MoveDirection.Magnitude>0 and 1 or 0) end
+            end
+            u21.Humanoid.Jump=LP.Character.Humanoid.Jump
+            u21.Humanoid:Move(LP.Character.Humanoid.MoveDirection,false)
+            if LP.Character.BodyEffects:FindFirstChild('Grabbed') and LP.Character.BodyEffects.Grabbed.Value==nil then
+                u21:Destroy()
+                for _, v in pairs(u19:GetDescendants()) do if v:IsA('BodyPosition') then v:Destroy() end end
+                for _, v in pairs(u22) do v:Disconnect() end
+                for _, name in ipairs({'LeftHand','RightHand','LeftFoot','RightFoot'}) do
+                    local p=u19:FindFirstChild(name); if p then local m=p:FindFirstChildOfClass('Motor6D'); if m then m.Enabled=true end end
+                end
+            end
+        end))
+    end)
+
+    -- BOOMHEADSHOT
+    local tBoom = MakeTool('BoomHeadShot')
+    tBoom.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        HighlightVictim(vchar,Color3.fromRGB(255,0,0),5)
+        local done=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,15,-40),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        local a=Instance.new('Animation'); a.AnimationId='rbxassetid://13823324057'
+        local tr=LP.Character.Humanoid:LoadAnimation(a); tr.Priority=Enum.AnimationPriority.Action; tr:Play()
+        for i=1,3 do task.delay(i*0.8,function() if vchar:FindFirstChild('Head') then ShockwaveRing(vchar.Head.Position,Color3.fromRGB(255,100,0),10,0.3) end end) end
+        task.wait(3); DismemberVictim(vchar); task.wait(0.2); FireMain('Grabbing')
+        task.wait(0.2); AnimStopv2(13823324057); done=true
+    end)
+
+    -- HEAVEN THROW
+    local tHeaven = MakeTool('Heaven Throw')
+    tHeaven.Activated:Connect(function()
+        EnsureGrabbedValue()
+        local vchar=LP.Character.BodyEffects.Grabbed.Value; if not vchar then return end
+        AnimStopv2(3135389157)
+        local vUT=vchar:FindFirstChild('UpperTorso')
+        if not vUT or not vUT:FindFirstChildWhichIsA('BodyPosition') then return end
+        local a=Instance.new('Animation'); a.AnimationId='rbxassetid://14496531574'
+        local tr=LP.Character.Humanoid:LoadAnimation(a); tr.Priority=Enum.AnimationPriority.Action; tr:Play(); tr:AdjustSpeed(1)
+        local beam=EnergyPillar(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(255,255,200),60,3,4)
+        TweenService:Create(beam,TweenInfo.new(2),{Size=Vector3.new(3,200,3),Transparency=0.8}):Play()
+        task.wait(0.4)
+        vUT:FindFirstChildWhichIsA('BodyPosition').D=200
+        vUT:FindFirstChildWhichIsA('BodyPosition').Position=LP.Character.HumanoidRootPart.Position+LP.Character.HumanoidRootPart.CFrame.LookVector*3+Vector3.new(0,3000,0)
+        task.wait(2); FireMain('Grabbing',false)
+    end)
+
+    -- DOMAIN EXPANSION
+    local tDomain = MakeTool('Domain Expansion')
+    tDomain.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        local hum=LP.Character:FindFirstChildOfClass('Humanoid'); if not hum then return end
+        local be=LP.Character:FindFirstChild('BodyEffects')
+        local grabbed=be and be:FindFirstChild('Grabbed')
+        if not grabbed or not grabbed.Value then return end
+        if not grabbed.Value:IsA('Model') then return end
+        local savedFE=Lighting.FogEnd; local savedFC=Lighting.FogColor; local done=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-10),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        local ok,objs=pcall(game.GetObjects,game,'rbxassetid://15554016057')
+        if not(ok and objs and objs[1]) then return end
+        local animTrack=hum:LoadAnimation(objs[1])
+        AnimStopv2(3135389157); AnimStopv2(11075367458)
+        grabbed:GetPropertyChangedSignal('Value'):Connect(function()
+            if not grabbed.Value then TweenLighting({FogColor=Color3.fromRGB(100,87,72),FogEnd=500},1) end
+        end)
+        hum.WalkSpeed=0; HighlightVictim(grabbed.Value,Color3.fromRGB(100,0,255),15)
+        task.wait(2.8); animTrack.Looped=false; animTrack:Play()
+        task.wait(2.5); TweenLighting({FogColor=Color3.new(0,0,0),FogEnd=50},1)
+        TweenService:Create(hum,TweenInfo.new(1),{HipHeight=10}):Play()
+        for i=1,5 do task.delay(i*0.3,function() ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(50,0,100),30+i*5,0.5) end) end
+        task.wait(1); animTrack.Stopped:Wait(); done=true
+        local ut=grabbed.Value:FindFirstChild('UpperTorso'); if ut then ut.CFrame=CFrame.new(0,-120000,0) end
+        task.wait(0.3); FireMain('Grabbing'); Destroy('UpperTorso')
+        hum.WalkSpeed=16; TweenService:Create(hum,TweenInfo.new(1),{HipHeight=2.008}):Play()
+        TweenLighting({FogColor=savedFC,FogEnd=savedFE},1)
+    end)
+
+    -- MADE IN HEAVEN
+    local tMiH = MakeTool('Made in Heaven')
+    tMiH.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local be=LP.Character:FindFirstChild('BodyEffects')
+        if not be or not be:FindFirstChild('Grabbed') or not be.Grabbed.Value then return end
+        local vchar=be.Grabbed.Value
+        local hum3=LP.Character:FindFirstChildOfClass('Humanoid'); if not hum3 then return end
+        local savedFOV=workspace.CurrentCamera.FieldOfView
+        local savedFogE=Lighting.FogEnd; local savedFogC=Lighting.FogColor
+        hum3.WalkSpeed=0; local stopLoop=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,7,-10),CFrame.Angles(0,math.pi,0))
+            until stopLoop
+        end)
+        AnimPlay(11394033602,1)
+        TweenService:Create(workspace.CurrentCamera,TweenInfo.new(1),{FieldOfView=120}):Play()
+        TweenLighting({FogEnd=20,FogColor=Color3.new(1,1,1)},1)
+        TweenService:Create(hum3,TweenInfo.new(1),{HipHeight=3.5}):Play()
+        for i=1,6 do task.delay(i*0.3,function() ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.new(1,1,1),20+i*8,0.5) end) end
+        local vUT=vchar:FindFirstChild('UpperTorso')
+        if vUT then local bp=Instance.new('BodyPosition',vUT); bp.MaxForce=Vector3.new(INF,INF,INF); bp.Position=vUT.Position+Vector3.new(0,10,-10); Debris:AddItem(bp,7) end
+        task.wait(7)
+        local ut2=vchar:FindFirstChild('UpperTorso'); if ut2 then ut2.CFrame=CFrame.new(0,-12000,0) end
+        task.wait(0.9); FireMain('Grabbing'); stopLoop=true; AnimStopv2(11394033602,0.5)
+        TweenService:Create(workspace.CurrentCamera,TweenInfo.new(1),{FieldOfView=savedFOV}):Play()
+        TweenLighting({FogColor=savedFogC,FogEnd=savedFogE},1)
+        TweenService:Create(hum3,TweenInfo.new(1),{HipHeight=2.008}):Play(); hum3.WalkSpeed=16
+    end)
+
+    -- GET OVER HERE
+    local tGOH = MakeTool('Get Over Here')
+    tGOH.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value; local stop=false
+        local function SetAlign(offset)
+            stop=false
+            task.spawn(function()
+                repeat task.wait()
+                    Align(8000,800,'UpperTorso','HumanoidRootPart',offset,CFrame.Angles(0,math.pi,0))
+                until stop
+            end)
+        end
+        local function PlayLP(id)
+            local a=Instance.new('Animation'); a.AnimationId='rbxassetid://'..id
+            local h=LP.Character:FindFirstChildOfClass('Humanoid')
+            if h then local tr=h:LoadAnimation(a); tr.Priority=Enum.AnimationPriority.Action; tr:Play() end
+        end
+        SetAlign(CFrame.new(0,0,-4)); task.wait(1)
+        PlayLP('3354696735'); ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(255,150,0),15,0.4)
+        task.wait(1); stop=true; SetAlign(CFrame.new(0,0,-30)); task.wait(0.9)
+        stop=true; SetAlign(CFrame.new(0,0,-4)); PlayLP('16768625968'); task.wait(0.9)
+        stop=true; SetAlign(CFrame.new(0,40,0)); PlayLP('14496531574'); task.wait(0.9)
+        local ut=vchar:FindFirstChild('UpperTorso'); if ut then ut.CFrame=CFrame.new(0,-12000,0) end
+        task.wait(0.5); FireMain('Grabbing'); Destroy('UpperTorso'); stop=true
+    end)
+
+    -- HEAD BREAKER
+    local tHB = MakeTool('Head Breaker')
+    tHB.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value; local stop=false
+        local function SetAlign(offset)
+            stop=false
+            task.spawn(function()
+                repeat task.wait()
+                    Align(8000,800,'UpperTorso','HumanoidRootPart',offset,CFrame.Angles(0,math.pi,0))
+                until stop
+            end)
+        end
+        local function PlayLP(id,spd)
+            local a=Instance.new('Animation'); a.AnimationId='rbxassetid://'..id
+            local h=LP.Character:FindFirstChildOfClass('Humanoid')
+            if h then local tr=h:LoadAnimation(a); tr.Priority=Enum.AnimationPriority.Action; if spd then tr:AdjustSpeed(spd) end; tr:Play() end
+        end
+        SetAlign(CFrame.new(0,0,-2)); PlayLP('2788306916',0.1); task.wait(1)
+        stop=true; SetAlign(CFrame.new(0,0,-30))
+        ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(200,50,50),25,0.5); task.wait(2)
+        stop=true; SetAlign(CFrame.new(0,0,-2)); PlayLP('16768625968',1); task.wait(2); PlayLP('2788292075',1)
+        if vchar:FindFirstChild('Head') then for i=1,4 do task.delay(i*0.05,function() SlashEffect(vchar.Head.Position,Color3.fromRGB(255,100,50)) end) end end
+        task.wait(0.9)
+        local ut=vchar:FindFirstChild('UpperTorso'); if ut then ut.CFrame=CFrame.new(0,-12000,0) end
+        DismemberVictim(vchar,-1200000); task.wait(0.5); FireMain('Grabbing'); stop=true
+    end)
+
+    -- HELL
+    local tHell = MakeTool('Hell')
+    tHell.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value; local stop=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,5,-10),CFrame.Angles(0,math.pi,0))
+            until stop
+        end)
+        local a=Instance.new('Animation'); a.AnimationId='rbxassetid://14774699952'
+        local tr=LP.Character.Humanoid:LoadAnimation(a); tr.Priority=Enum.AnimationPriority.Action; tr:Play(); tr:AdjustSpeed(0.09)
+        TweenLighting({FogColor=Color3.fromRGB(150,20,0),FogEnd=80},0.5)
+        for i=1,9 do task.delay(i,function()
+            if not stop then
+                ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(255,50,0),15,0.6)
+                NeonSphere(LP.Character.HumanoidRootPart.Position+Vector3.new(math.random(-5,5),math.random(0,5),math.random(-5,5)),Color3.fromRGB(255,100,0),2,1.5)
+            end
+        end) end
+        task.wait(9); stop=true; TweenLighting({FogColor=Color3.fromRGB(100,87,72),FogEnd=500},1)
+        local ut=vchar:FindFirstChild('UpperTorso'); if ut then ut.CFrame=CFrame.new(0,-1200000,0) end
+        DismemberVictim(vchar,-1200000); task.wait(0.5); FireMain('Grabbing')
+    end)
+
+    -- IDK
+    local tIdk = MakeTool('Idk')
+    local idkActive=false
+    tIdk.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if idkActive or not LP.Character.BodyEffects.Grabbed.Value then return end
+        idkActive=true; getgenv().Furry_=false
+        AnimPlay(4784557631); AnimPlay(3119980985,2)
+        local conn2
+        conn2=RunService.Heartbeat:Connect(function()
+            local g=LP.Character.BodyEffects.Grabbed.Value
+            if not g or getgenv().Furry_ then
+                conn2:Disconnect(); AnimStopv2(4784557631); AnimStopv2(3119980985,0.5)
+                Destroy('UpperTorso'); idkActive=false; return
+            end
+            if not u19 then return end
+            for _, v in pairs(u19:GetDescendants()) do
+                if v:IsA('BasePart') then ZeroVelocity___(v); v.CanCollide=false end
+            end
+            local t2=tick()*133.33
+            Align(10000,175,'UpperTorso','HumanoidRootPart',CFrame.new(0,-0.3,-1.2+0.3*math.sin(t2/8)),CFrame.Angles(math.pi*-0.3,0,0))
+        end)
+    end)
+
+    -- FLY PUNCH
+    local tFP = MakeTool('fly punch')
+    tFP.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local hrp3=LP.Character:FindFirstChild('HumanoidRootPart'); local done=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-10),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        if _G.Velocity then _G.Velocity:Disconnect(); _G.Velocity=nil end
+        _G.Velocity=RunService.RenderStepped:Connect(function()
+            if hrp3 then ZeroVelocity___(hrp3); hrp3.AssemblyLinearVelocity=Vector3.new(0,3,0) end
+        end)
+        task.wait(0.6); AnimPlay(10714164866,1.1)
+        if _G.Hut then _G.Hut:Disconnect(); _G.Hut=nil end
+        _G.Hut=RunService.Heartbeat:Connect(function() if hrp3 then hrp3.Velocity=Vector3.new(0,15,0) end end)
+        task.wait(2)
+        if _G.Hut then _G.Hut:Disconnect(); _G.Hut=nil end
+        if _G.Velocity then _G.Velocity:Disconnect(); _G.Velocity=nil end
+        if hrp3 then _G.Velocity=RunService.RenderStepped:Connect(function() ZeroVelocity___(hrp3); hrp3.AssemblyLinearVelocity=Vector3.new(0,3,0) end) end
+        AnimPlay(10714164866,0,nil,1.7); task.wait(2.6); AnimStopv2(10714164866,0.5); done=true
+        task.spawn(function()
+            local done2=false
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-200),CFrame.Angles(math.pi*-0.2,math.pi,0))
+            until done2; done2=true
+        end)
+        task.wait(0.2); DismemberVictim(vchar,-1200); task.wait(0.3); FireMain('Grabbing'); Destroy('UpperTorso')
+        if _G.Velocity then _G.Velocity:Disconnect(); _G.Velocity=nil end
+    end)
+
+    -- BOXING
+    local tBoxing = MakeTool('Boxing')
+    tBoxing.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local hum6=LP.Character:FindFirstChildOfClass('Humanoid'); if not hum6 then return end
+        local done=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-2),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        local a13=Instance.new('Animation'); a13.AnimationId='rbxassetid://10717116749'
+        local t13=hum6:LoadAnimation(a13); t13.Priority=Enum.AnimationPriority.Action; t13:Play(); task.wait(2); t13:Stop(0)
+        local a14=Instance.new('Animation'); a14.AnimationId='rbxassetid://3354699999'
+        local t14=hum6:LoadAnimation(a14); t14.Priority=Enum.AnimationPriority.Action; t14:Play()
+        task.wait(0.2)
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,5,-10),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        for i=1,4 do task.delay(i*0.3,function() if vchar:FindFirstChild('UpperTorso') then ShockwaveRing(vchar.UpperTorso.Position,Color3.fromRGB(200,200,50),10,0.3) end end) end
+        task.wait(2); DismemberVictim(vchar); task.wait(0.5); FireMain('Grabbing'); done=true
+    end)
+
+    -- BAT KNOCK
+    local tBat = MakeTool('Bat Knock')
+    tBat.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value; local done=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-4),CFrame.Angles(math.pi*-0.2,math.pi,0))
+            until done
+        end)
+        task.wait(1)
+        local bat=LP.Backpack:FindFirstChild('[Bat]'); if bat and LP.Character then bat.Parent=LP.Character end
+        task.wait(0.5); AnimPlay(3172948973,1)
+        ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(255,200,100),20,0.5); task.wait(1)
+        local ut=vchar:FindFirstChild('UpperTorso'); if ut then ut.CFrame=CFrame.new(0,-1200,0) end
+        task.wait(0.3); done=true; FireMain('Grabbing'); Destroy('UpperTorso')
+    end)
+
+    -- CRUSHER
+    local tCrusher = MakeTool('Crusher')
+    tCrusher.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        AnimPlay(79609108940071,1); HighlightVictim(vchar,Color3.fromRGB(255,50,50),3); task.wait(0.5)
+        local elapsed=0; local conn3
+        conn3=RunService.Heartbeat:Connect(function(dt)
+            elapsed+=dt
+            Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-10),CFrame.Angles(0,math.pi,0))
+            if elapsed>=1.5 then conn3:Disconnect() end
+        end)
+        repeat task.wait() until not conn3.Connected; DismemberVictim(vchar)
+    end)
+
+    -- KNIFE KILLER
+    local tKnife = MakeTool('Knife Killer')
+    tKnife.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local knife=LP.Backpack:FindFirstChild('[Knife]') or LP.Character:FindFirstChild('[Knife]'); local done=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-10),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        local kk=LP.Character:FindFirstChild('Knife Killer'); if kk then kk.Parent=LP.Backpack end
+        AnimPlay(3096047107,0.15)
+        if knife then
+            knife.GripRight=Vector3.new(0,0,-1); knife.Parent=LP.Character
+            task.wait(0.5); AnimPlay(3096047107,1); task.wait(0.6)
+            for i=1,30 do
+                knife.Parent=LP.Backpack; knife.Parent=LP.Character; knife.GripPos=knife.GripPos+Vector3.new(0.45,0,0)
+                if i%5==0 and vchar:FindFirstChild('UpperTorso') then SlashEffect(vchar.UpperTorso.Position,Color3.fromRGB(180,0,0)) end
+                task.wait(0)
+            end
+            knife.Parent=LP.Backpack; knife.GripPos=Vector3.new(0,0,0)
+        end
+        task.wait(0.2); done=true
+        local ut=vchar:FindFirstChild('UpperTorso'); if ut then ut.CFrame=CFrame.new(0,-1200,0) end
+        task.wait(0.3); FireMain('Grabbing')
+    end)
+
+    -- COMBO
+    local tCombo = MakeTool('Combo')
+    tCombo.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value; local done=false
+        task.spawn(function()
+            while not done do task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-10),CFrame.Angles(0,0,0))
+            end
+        end)
+        task.wait(1.6); LP.Character.HumanoidRootPart.CFrame=LP.Character.HumanoidRootPart.CFrame*CFrame.new(0,0,-10); task.wait(0.2)
+        for _2=1,40 do
+            AnimPlay(2788292075,1.4)
+            local hrp=LP.Character.HumanoidRootPart
+            hrp.CFrame=hrp.CFrame*CFrame.new(0,0,-4); task.wait(0.03)
+            hrp.CFrame=hrp.CFrame*CFrame.new(0,0,8);  task.wait(0.03)
+            hrp.CFrame=hrp.CFrame*CFrame.new(0,0,-4); task.wait(0.03)
+            hrp.CFrame=hrp.CFrame*CFrame.new(-4,0,0); task.wait(0.03)
+            hrp.CFrame=hrp.CFrame*CFrame.new(8,0,0);  task.wait(0.03)
+            hrp.CFrame=hrp.CFrame*CFrame.new(-4,0,0)
+        end
+        done=true; ShockwaveRing(LP.Character.HumanoidRootPart.Position,Color3.fromRGB(255,200,50),35,0.6)
+        task.wait(0.1); DismemberVictim(vchar); task.wait(0.3); FireMain('Grabbing'); Destroy('UpperTorso')
+    end)
+
+    -- STAND
+    local tStand = MakeTool('Stand')
+    tStand.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157); local done=false
+        task.spawn(function()
+            while not done do task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(2,5,3),CFrame.Angles(0,0,0))
+            end
+        end)
+        task.spawn(function() repeat task.wait() until LP.Character.BodyEffects.Grabbed.Value==nil; done=true end)
+    end)
+
+    -- RIP IN HALF
+    local tRip = MakeTool('Rip In Half')
+    tRip.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value; local done=false
+        local a15=Instance.new('Animation'); a15.AnimationId='rbxassetid://13850666420'
+        local t15=LP.Character.Humanoid:LoadAnimation(a15); t15.Priority=Enum.AnimationPriority.Action; t15:Play()
+        local a16=Instance.new('Animation'); a16.AnimationId='rbxassetid://13850675130'
+        local t16=LP.Character.Humanoid:LoadAnimation(a16); t16.Priority=Enum.AnimationPriority.Action; t16:Play()
+        task.spawn(function()
+            while not done do task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-2),CFrame.Angles(0,0,0))
+            end
+        end)
+        task.delay(1.5,function()
+            if vchar:FindFirstChild('UpperTorso') then
+                SlashEffect(vchar.UpperTorso.Position,Color3.fromRGB(200,0,0))
+                if vchar:FindFirstChild('HumanoidRootPart') then ShockwaveRing(vchar.HumanoidRootPart.Position,Color3.fromRGB(180,0,0),15,0.4) end
+            end
+        end)
+        task.wait(2); DismemberVictim(vchar); task.wait(0.3); FireMain('Grabbing'); done=true; Destroy('UpperTorso')
+        if t15 then t15:Stop() end; if t16 then t16:Stop() end
+    end)
+
+    -- PUNCH
+    local tPunch = MakeTool('Punch')
+    tPunch.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local hrp4=LP.Character:FindFirstChild('HumanoidRootPart'); local done=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-10),CFrame.Angles(0,math.pi,0))
+            until done
+        end)
+        task.wait(0.6); done=true; AnimPlay(2788292075,1.4); task.wait(0.2)
+        if hrp4 then
+            local tw=TweenService:Create(hrp4,TweenInfo.new(0.1),{CFrame=hrp4.CFrame*CFrame.new(0,0,-20)})
+            tw:Play(); tw.Completed:Wait()
+        end
+        ShockwaveRing(hrp4 and hrp4.Position or Vector3.zero,Color3.fromRGB(255,200,50),30,0.5)
+        local done2=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,100,-270),CFrame.Angles(0,math.pi,0))
+            until done2
+        end)
+        task.wait(0.3); DismemberVictim(vchar); task.wait(0.3); FireMain('Grabbing'); Destroy('UpperTorso'); done2=true
+    end)
+
+    -- CONTROL
+    local tControl = MakeTool('Control')
+    tControl.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value then return end
+        task.wait(1)
+        local ctrl=LP.Character:FindFirstChild('Control'); if ctrl then ctrl.Parent=LP.Backpack end
+        u20=true; task.wait(); u20=false; u21=u107(u19); workspace.CurrentCamera.CameraSubject=u21
+        u31(u22, u37('Heartbeat', function()
+            LP.Character.HumanoidRootPart.CFrame=u21.HumanoidRootPart.CFrame*CFrame.new(0,-15,0)*CFrame.Angles(math.pi*0.5,0,0)
+            ZeroVelocity___(LP.Character.HumanoidRootPart)
+            for _, name in ipairs(BODY_PARTS) do
+                local vp=u19:FindFirstChild(name); local cp=u21:FindFirstChild(name)
+                if vp and cp then u27(vp,cp,CFrame.new()) end
+            end
+            for _, id in ipairs({3152375249,3152378852,3189773368,3189776546,3189777795,3189779152,3487719500,11710529975,11710524717,11710527244,11710529220,11710524200,11710541744}) do u84(id) end
+            for _, t in pairs(u21.Humanoid:GetPlayingAnimationTracks()) do
+                if t.Animation.AnimationId:match('rbxassetid://3152394906') then t:AdjustSpeed(u21.Humanoid.MoveDirection.Magnitude<=0 and 0 or 1) end
+            end
+            u21.Humanoid.Jump=LP.Character.Humanoid.Jump
+            u21.Humanoid:Move(LP.Character.Humanoid.MoveDirection,false)
+        end))
+        u127()
+    end)
+
+    -- SANS FINAL ATTACK
+    local tSans = MakeTool('Sans Final Attack')
+    tSans.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        AnimStopv2(3135389157)
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local myHRP=LP.Character.HumanoidRootPart; local stop=false
+        task.spawn(function()
+            repeat task.wait()
+                Align(8000,800,'UpperTorso','HumanoidRootPart',CFrame.new(0,0,-5),CFrame.Angles(0,math.pi,0))
+            until stop
+        end)
+        AnimPlay(113226933496361,2)
+        local boneConn; local boneIdx=0
+        boneConn=RunService.Heartbeat:Connect(function()
+            if stop then boneConn:Disconnect(); return end
+            boneIdx+=1; if boneIdx%6~=0 then return end
+            local vUT=u19 and u19:FindFirstChild('UpperTorso'); if not vUT then return end
+            local positions={vUT.Position+Vector3.new(0,15,0),vUT.Position+Vector3.new(0,-30,0),vUT.Position+Vector3.new(-15,15,0),vUT.Position+Vector3.new(30,0,0)}
+            local pos=positions[math.random(1,#positions)]
+            local bone=Instance.new('Part',workspace); bone.Size=Vector3.new(0.5,3,0.5); bone.Color=Color3.new(1,1,1)
+            bone.Material=Enum.Material.Neon; bone.Anchored=true; bone.CanCollide=false
+            bone.CFrame=CFrame.new(pos)*CFrame.Angles(math.random()*math.pi,math.random()*math.pi,0)
+            TweenService:Create(bone,TweenInfo.new(0.4),{CFrame=bone.CFrame+Vector3.new(0,5,0),Transparency=1}):Play()
+            Debris:AddItem(bone,0.4)
+        end)
+        for i=1,8 do
+            local vUT=u19 and u19:FindFirstChild('UpperTorso')
+            if vUT then
+                local offsets={Vector3.new(0,15,0),Vector3.new(0,-30,0),Vector3.new(-15,15,0),Vector3.new(30,0,0)}
+                for _, off in ipairs(offsets) do
+                    if not vUT.Parent then break end
+                    vUT.CFrame=myHRP.CFrame*CFrame.new(off.X,off.Y,off.Z-5)
+                    ShockwaveRing(vUT.CFrame.Position,Color3.new(1,1,1),8,0.2); task.wait(0.12)
+                end
+            end
+        end
+        stop=true; AnimStopv2(113226933496361); Destroy('UpperTorso'); FireMain('Grabbing',false)
+        AnimPlay(91613018597182,0.5); task.wait(3); AnimStopv2(91613018597182)
+    end)
+
+    -- KAMEHAMEHA
+    local tKame = MakeTool('Kamehameha')
+    tKame.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local vHRP=u19:FindFirstChild('HumanoidRootPart'); local myHRP=LP.Character.HumanoidRootPart
+        if not vHRP then return end
+        AnimStopv2(3135389157)
+        if not vHRP:FindFirstChildWhichIsA('BodyPosition') then
+            local bp=Instance.new('BodyPosition',vHRP); bp.MaxForce=Vector3.new(INF,INF,INF); bp.P=30000
+        end
+        if not vHRP:FindFirstChildWhichIsA('BodyGyro') then
+            local bg=Instance.new('BodyGyro',vHRP); bg.MaxTorque=Vector3.new(INF,INF,INF); bg.P=30000
+        end
+        AnimPlay(10508008831,1)
+        local chargeConn; local chargeAngle=0
+        chargeConn=RunService.Heartbeat:Connect(function(dt)
+            chargeAngle+=dt*5
+            for i=1,2 do
+                local angle=chargeAngle+i*math.pi
+                local orbPos=myHRP.Position+Vector3.new(math.cos(angle)*4,0,math.sin(angle)*4)
+                local orb=Instance.new('Part',workspace); orb.Shape=Enum.PartType.Ball; orb.Size=Vector3.new(0.8,0.8,0.8)
+                orb.Color=Color3.fromRGB(0,100,255); orb.Material=Enum.Material.Neon; orb.Anchored=true; orb.CanCollide=false; orb.CFrame=CFrame.new(orbPos)
+                TweenService:Create(orb,TweenInfo.new(0.15),{CFrame=CFrame.new(myHRP.Position),Size=Vector3.new(0.1,0.1,0.1),Transparency=1}):Play()
+                Debris:AddItem(orb,0.15)
+            end
+            local bp=vHRP:FindFirstChildWhichIsA('BodyPosition'); local bg=vHRP:FindFirstChildWhichIsA('BodyGyro')
+            if bp then bp.Position=(myHRP.CFrame*CFrame.new(0,0,-2)).Position end
+            if bg then bg.CFrame=myHRP.CFrame end
+            ZeroVelocity___(vHRP)
+        end)
+        task.wait(5); chargeConn:Disconnect(); AnimStopv2(10508008831); AnimPlay(10508412041,1)
+        local beamDir=myHRP.CFrame.LookVector; local beamStart=myHRP.Position
+        local beam=Instance.new('Part',workspace); beam.Size=Vector3.new(3,3,5); beam.Color=Color3.fromRGB(0,100,255)
+        beam.Material=Enum.Material.Neon; beam.Anchored=true; beam.CanCollide=false
+        beam.CFrame=CFrame.new(beamStart+beamDir*2.5,beamStart+beamDir*100)
+        TweenService:Create(beam,TweenInfo.new(0.3),{Size=Vector3.new(4,4,150),Transparency=0.1}):Play()
+        local vBP=vHRP:FindFirstChildWhichIsA('BodyPosition'); local vBG=vHRP:FindFirstChildWhichIsA('BodyGyro')
+        if vBP then vBP.Position=beamStart+beamDir*150 end
+        if vBG then vBG.CFrame=CFrame.lookAt(vHRP.Position,beamStart) end
+        task.wait(5)
+        TweenService:Create(beam,TweenInfo.new(0.5),{Transparency=1,Size=Vector3.new(0.1,0.1,0.1)}):Play(); Debris:AddItem(beam,0.5)
+        if vBP then vBP:Destroy() end; if vBG then vBG:Destroy() end; FireMain('Grabbing',false)
+        local ut=vchar:FindFirstChild('HumanoidRootPart'); if ut then ut.CFrame=CFrame.new(0,-500,0) end
+    end)
+
+    -- SAITAMA
+    local tSaitama = MakeTool('Saitama')
+    tSaitama.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local vHRP=u19:FindFirstChild('HumanoidRootPart') or u19:FindFirstChild('UpperTorso')
+        local myHRP=LP.Character.HumanoidRootPart; if not vHRP then return end
+        AnimStopv2(3135389157)
+        local windConn; local wt=0
+        windConn=RunService.Heartbeat:Connect(function(dt)
+            wt+=dt; if wt<0.5 then return end; wt=0
+            ShockwaveRing(myHRP.Position,Color3.fromRGB(255,220,0),math.random(8,15),0.4)
+        end)
+        if not vHRP:FindFirstChildWhichIsA('BodyPosition') then
+            local bp=Instance.new('BodyPosition',vHRP); bp.MaxForce=Vector3.new(INF,INF,INF); bp.P=20000
+        end
+        if not vHRP:FindFirstChildWhichIsA('BodyGyro') then
+            local bg=Instance.new('BodyGyro',vHRP); bg.MaxTorque=Vector3.new(INF,INF,INF); bg.P=20000
+        end
+        AnimPlay(11432415170,1)
+        local syncConn
+        syncConn=RunService.Heartbeat:Connect(function()
+            local bp=vHRP:FindFirstChildWhichIsA('BodyPosition'); local bg=vHRP:FindFirstChildWhichIsA('BodyGyro')
+            if bp then bp.Position=(myHRP.CFrame*CFrame.new(0,0,-3.5)).Position end
+            if bg then bg.CFrame=myHRP.CFrame*CFrame.Angles(0,math.pi,0) end
+            ZeroVelocity___(vHRP)
+        end)
+        task.wait(6); windConn:Disconnect(); syncConn:Disconnect(); AnimStopv2(11432415170)
+        EnsureGrabbedValue()
+        if LP.Character.BodyEffects.Grabbed.Value then
+            local bp=vHRP:FindFirstChildWhichIsA('BodyPosition'); local bg=vHRP:FindFirstChildWhichIsA('BodyGyro')
+            if bp then bp:Destroy() end; if bg then bg:Destroy() end
+            FireMain('Grabbing',false)
+            for i=1,5 do task.delay(i*0.05,function() ShockwaveRing(myHRP.Position+myHRP.CFrame.LookVector*(i*5),Color3.fromRGB(255,255,200),10+i*8,0.4) end) end
+            vHRP.Velocity=myHRP.CFrame.LookVector*500
+        end
+    end)
+
+    -- DOMAIN GOJO
+    local tDGojo = MakeTool('Domain Gojo')
+    tDGojo.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local vHRP=u19:FindFirstChild('HumanoidRootPart'); local myHRP=LP.Character.HumanoidRootPart
+        if not vHRP then return end
+        AnimStopv2(3135389157)
+        local domainPos=myHRP.Position+Vector3.new(0,800,0)
+        local plat=Instance.new('Part',workspace); plat.Size=Vector3.new(60,1,60)
+        plat.CFrame=CFrame.new(domainPos-Vector3.new(0,3,0)); plat.Anchored=true; plat.Transparency=0.8; plat.Color=Color3.fromRGB(150,200,255); plat.Material=Enum.Material.Neon
+        local sphere=NeonSphere(domainPos,Color3.fromRGB(200,240,255),0.1,30)
+        TweenService:Create(sphere,TweenInfo.new(1),{Size=Vector3.new(150,150,150),Transparency=0.85}):Play()
+        vHRP.CFrame=CFrame.new(domainPos); task.wait(); myHRP.CFrame=CFrame.new(domainPos+Vector3.new(0,2,0))
+        local bp=Instance.new('BodyPosition',vHRP); bp.MaxForce=Vector3.new(INF,INF,INF); bp.P=20000
+        local bg=Instance.new('BodyGyro',vHRP); bg.MaxTorque=Vector3.new(INF,INF,INF); bg.P=20000
+        AnimPlay(75978252489598,1)
+        for i=1,8 do task.delay(i*0.4,function() ShockwaveRing(domainPos,Color3.fromRGB(100,200,255),10+i*8,0.6) end) end
+        EnsureGrabbedValue()
+        LP.Character.BodyEffects.Grabbed:GetPropertyChangedSignal('Value'):Connect(function()
+            if not LP.Character.BodyEffects.Grabbed.Value then
+                pcall(bp.Destroy,bp); pcall(bg.Destroy,bg); plat:Destroy(); sphere:Destroy()
+            end
+        end)
+    end)
+
+    -- DOMAIN SUKUNA
+    local tDSuku = MakeTool('Domain Sukuna')
+    tDSuku.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local vHRP=u19:FindFirstChild('HumanoidRootPart'); local myHRP=LP.Character.HumanoidRootPart
+        if not vHRP then return end
+        AnimStopv2(3135389157)
+        local domainPos=myHRP.Position+Vector3.new(0,900,0)
+        local plat=Instance.new('Part',workspace); plat.Size=Vector3.new(60,1,60)
+        plat.CFrame=CFrame.new(domainPos-Vector3.new(0,3,0)); plat.Anchored=true; plat.Transparency=0.8; plat.Color=Color3.fromRGB(80,0,0)
+        local sphere2=NeonSphere(domainPos,Color3.fromRGB(180,0,50),0.1,30)
+        TweenService:Create(sphere2,TweenInfo.new(1),{Size=Vector3.new(140,140,140),Transparency=0.8}):Play()
+        vHRP.CFrame=CFrame.new(domainPos); task.wait(); myHRP.CFrame=CFrame.new(domainPos+Vector3.new(0,2,0))
+        local bp=Instance.new('BodyPosition',vHRP); bp.MaxForce=Vector3.new(INF,INF,INF); bp.P=20000; bp.Position=domainPos
+        for _, lname in ipairs({'LeftUpperArm','RightUpperArm','LeftUpperLeg','RightUpperLeg'}) do
+            task.wait(0.8)
+            EnsureGrabbedValue()
+            if not LP.Character.BodyEffects.Grabbed.Value then break end
+            local limb=vchar:FindFirstChild(lname)
+            if limb then SlashEffect(limb.Position,Color3.fromRGB(200,0,50)); ShockwaveRing(limb.Position,Color3.fromRGB(180,0,0),10,0.3); limb.CFrame=CFrame.new(0,-1200000,0) end
+        end
+        task.wait(0.5); FireMain('Grabbing',false); pcall(bp.Destroy,bp); plat:Destroy(); sphere2:Destroy()
+    end)
+
+    -- LOW CORTISOL
+    local tLC = MakeTool('Low Cortisol')
+    tLC.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local sound=Instance.new('Sound',LP.Character.HumanoidRootPart)
+        sound.Name='LowCortisolAudio'; sound.Volume=2
+        pcall(function()
+            local mp='lowcortisol_audio.mp3'
+            if not isfile(mp) then writefile(mp,game:HttpGet('https://github.com/lolledg/Test/raw/refs/heads/main/lowcortisol.mp3')) end
+            sound.SoundId=getcustomasset(mp)
+        end)
+        sound:Play(); u20=true; task.wait(); u20=false
+        local cc2=u107(u19); if not cc2 then sound:Destroy(); return end
+        cc2.HumanoidRootPart.CFrame=LP.Character.HumanoidRootPart.CFrame*CFrame.new(4,0,0)
+        local sc=RunService.Heartbeat:Connect(function()
+            if not cc2 or not cc2.Parent then return end
+            for _, pname in ipairs(BODY_PARTS) do
+                local op=u19:FindFirstChild(pname); local cp=cc2:FindFirstChild(pname)
+                if op and cp then u27(op,cp,CFrame.new()) end
+            end
+            cc2.HumanoidRootPart.CFrame=LP.Character.HumanoidRootPart.CFrame*CFrame.new(4,0,0)
+            ZeroVelocity___(cc2.HumanoidRootPart)
+        end)
+        task.spawn(function()
+            task.wait(5.8); EnsureGrabbedValue()
+            if LP.Character.BodyEffects.Grabbed.Value then
+                AnimPlay(100253510018322,1)
+                if cc2 and cc2:FindFirstChildOfClass('Humanoid') then
+                    local a=Instance.new('Animation'); a.AnimationId='rbxassetid://100253510018322'
+                    cc2.Humanoid:LoadAnimation(a):Play()
+                end
+            end
+        end)
+        local rc; rc=RunService.Heartbeat:Connect(function()
+            EnsureGrabbedValue()
+            if LP.Character.BodyEffects.Grabbed.Value then return end
+            rc:Disconnect(); sc:Disconnect(); sound:Stop(); sound:Destroy()
+            if cc2 then cc2:Destroy() end; AnimStopv2(100253510018322)
+            for _, v in pairs(u19:GetDescendants()) do if v:IsA('BodyPosition') then v:Destroy() end end
+        end)
+    end)
+
+    -- OTSUKARE SUMMER
+    local tOtsu = MakeTool('Otsukare Summer')
+    tOtsu.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local sound=Instance.new('Sound',LP.Character.HumanoidRootPart)
+        sound.Name='OtsukareAudio'; sound.Volume=2
+        pcall(function()
+            local mp='otsukare_audio.mp3'
+            if not isfile(mp) then writefile(mp,game:HttpGet('https://github.com/lolledg/Test/raw/refs/heads/main/otsukare.mp3')) end
+            sound.SoundId=getcustomasset(mp)
+        end)
+        sound:Play(); u20=true; task.wait(); u20=false
+        local cc3=u107(u19); if not cc3 then sound:Destroy(); return end
+        cc3.HumanoidRootPart.CFrame=LP.Character.HumanoidRootPart.CFrame*CFrame.new(4.1,0,0)
+        local sc=RunService.Heartbeat:Connect(function()
+            if not cc3 or not cc3.Parent then return end
+            for _, pname in ipairs(BODY_PARTS) do
+                local op=u19:FindFirstChild(pname); local cp=cc3:FindFirstChild(pname)
+                if op and cp then u27(op,cp,CFrame.new()) end
+            end
+            cc3.HumanoidRootPart.CFrame=LP.Character.HumanoidRootPart.CFrame*CFrame.new(4.1,0,0)
+            ZeroVelocity___(cc3.HumanoidRootPart)
+        end)
+        task.spawn(function()
+            task.wait(5.8); EnsureGrabbedValue()
+            if LP.Character.BodyEffects.Grabbed.Value then
+                AnimPlay(96239426856784,1)
+                if cc3 and cc3:FindFirstChildOfClass('Humanoid') then
+                    local a=Instance.new('Animation'); a.AnimationId='rbxassetid://96239426856784'
+                    cc3.Humanoid:LoadAnimation(a):Play()
+                end
+            end
+        end)
+        local rc; rc=RunService.Heartbeat:Connect(function()
+            EnsureGrabbedValue()
+            if LP.Character.BodyEffects.Grabbed.Value then return end
+            rc:Disconnect(); sc:Disconnect(); sound:Stop(); sound:Destroy()
+            if cc3 then cc3:Destroy() end; AnimStopv2(96239426856784)
+        end)
+    end)
+
+    -- HOLLOW NUKE
+    local tNuke = MakeTool('Hollow Nuke')
+    tNuke.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local vHRP2=u19:FindFirstChild('HumanoidRootPart'); local myHRP=LP.Character.HumanoidRootPart
+        if not vHRP2 then return end
+        AnimStopv2(3135389157)
+        local bp=Instance.new('BodyPosition',vHRP2); bp.MaxForce=Vector3.new(9e5,9e5,9e5); bp.P=10000
+        local bg=Instance.new('BodyGyro',vHRP2); bg.MaxTorque=Vector3.new(9e5,9e5,9e5); bg.P=10000
+        AnimPlay(109504559118350,0.3); myHRP.Anchored=true
+        local bO=NeonSphere(myHRP.Position,Color3.fromRGB(0,100,255),3,999)
+        local rO=NeonSphere(myHRP.Position,Color3.new(1,0,0),3,999)
+        local angle=0
+        for i=1,80 do
+            angle+=0.08
+            local newCF=myHRP.CFrame+Vector3.new(0,i,0)
+            myHRP.CFrame=newCF; bp.Position=(newCF*CFrame.new(0,0,-5)).Position
+            bg.CFrame=CFrame.new(bp.Position,newCF.Position)
+            bO.CFrame=newCF*CFrame.new(math.cos(angle*10)*6,2,math.sin(angle*10)*6)
+            rO.CFrame=newCF+Vector3.new(0,15,0); task.wait(0.02)
+        end
+        bO:Destroy(); rO:Destroy()
+        local nS=NeonSphere((myHRP.CFrame*CFrame.new(0,0,-5)).Position,Color3.fromRGB(150,0,255),1,10)
+        TweenService:Create(nS,TweenInfo.new(1),{Size=Vector3.new(60,60,60),Transparency=0.3}):Play()
+        for _, lname in ipairs({'LeftUpperArm','RightUpperArm','LeftUpperLeg','RightUpperLeg'}) do
+            local l=vchar:FindFirstChild(lname)
+            if l then SlashEffect(l.Position,Color3.fromRGB(150,0,255)); l:Destroy() end
+            task.wait(0.1)
+        end
+        task.wait(1); vHRP2.CFrame=CFrame.new(0,-500,0); nS:Destroy()
+        myHRP.Anchored=false; pcall(bp.Destroy,bp); pcall(bg.Destroy,bg); FireMain('Grabbing',false)
+    end)
+
+    -- HOLLOW PURPLE
+    local tPurple = MakeTool('Hollow Purple')
+    tPurple.Activated:Connect(function()
+        EnsureGrabbedValue()
+        if not LP.Character.BodyEffects.Grabbed.Value or not u19 then return end
+        local vchar=LP.Character.BodyEffects.Grabbed.Value
+        local vHRP3=u19:FindFirstChild('HumanoidRootPart'); local myHRP=LP.Character.HumanoidRootPart
+        if not vHRP3 then return end
+        AnimStopv2(3135389157)
+        local bOr=NeonSphere(myHRP.Position+Vector3.new(-4,0,0),Color3.fromRGB(0,100,255),4,5)
+        local rOr=NeonSphere(myHRP.Position+Vector3.new(4,0,0),Color3.new(1,0,0),4,5)
+        TweenService:Create(bOr,TweenInfo.new(1),{CFrame=CFrame.new(myHRP.Position+myHRP.CFrame.LookVector*2),Size=Vector3.new(2,2,2)}):Play()
+        TweenService:Create(rOr,TweenInfo.new(1),{CFrame=CFrame.new(myHRP.Position+myHRP.CFrame.LookVector*2),Size=Vector3.new(2,2,2)}):Play()
+        AnimPlay(126454897748165,1); vHRP3.CFrame=myHRP.CFrame*CFrame.new(0,0,-5)
+        task.wait(1); bOr:Destroy(); rOr:Destroy()
+        local pO=NeonSphere((myHRP.CFrame*CFrame.new(0,0,-5)).Position,Color3.fromRGB(150,0,255),10,5)
+        TweenService:Create(pO,TweenInfo.new(0.5),{CFrame=CFrame.new(myHRP.Position+myHRP.CFrame.LookVector*80),Size=Vector3.new(15,15,15),Transparency=0.3}):Play()
+        task.wait(0.2); HighlightVictim(vchar,Color3.fromRGB(150,0,255),2)
+        for _, lname in ipairs({'LeftUpperArm','RightUpperArm','LeftUpperLeg','RightUpperLeg'}) do
+            local l=vchar:FindFirstChild(lname)
+            if l then SlashEffect(l.Position,Color3.fromRGB(150,0,255)); l:Destroy() end
+        end
+        task.wait(2); vHRP3.CFrame=CFrame.new(0,-500,0); pO:Destroy(); FireMain('Grabbing',false)
+    end)
+
+    -- MALEVOLENT SHRINE
+    local tMalev = MakeTool('Malevolent Shrine')
+    tMalev.Activated:Connect(function()
+        local Char2=LP.Character; local Root=Char2 and Char2:FindFirstChild('HumanoidRootPart'); if not Root then return end
+        local posOrig=Root.CFrame; local active=true
+        local savedFE=Lighting.FogEnd; local savedFC=Lighting.FogColor; local savedAmb=Lighting.Ambient
+        local amS=Instance.new('Animation'); amS.AnimationId='rbxassetid://18896127525'
+        local tmS=Char2.Humanoid:LoadAnimation(amS); tmS:Play(); task.wait(1); tmS:AdjustSpeed(0)
+        local sndA=Instance.new('Sound',workspace); sndA.SoundId='rbxassetid://85929440442310'; sndA.Volume=1; sndA:Play(); task.wait(2)
+        TweenLighting({FogEnd=50,FogColor=Color3.new(0,0,0),Ambient=Color3.fromRGB(30,0,0)},1); task.wait(1)
+        local DOMAIN_Y=-200; local RADIUS=110
+        if workspace:FindFirstChild('DominioTotal') then workspace.DominioTotal:Destroy() end
+        local folder=Instance.new('Folder',workspace); folder.Name='DominioTotal'
+        for i=0,math.floor(RADIUS*1.5) do
+            local lat=(i/math.floor(RADIUS*1.5))*math.pi
+            for j=0,math.floor(RADIUS*2.5) do
+                local lon=(j/math.floor(RADIUS*2.5))*2*math.pi
+                local x=RADIUS*math.sin(lat)*math.cos(lon); local y=RADIUS*math.cos(lat); local z=RADIUS*math.sin(lat)*math.sin(lon)
+                local p=Instance.new('Part',folder); p.Anchored=true; p.Color=Color3.new(0,0,0); p.Size=Vector3.new(6,6,2); p.CanCollide=false
+                p.CFrame=CFrame.lookAt(Vector3.new(x,DOMAIN_Y+y,z),Vector3.new(0,DOMAIN_Y,0))
+            end; task.wait()
+        end
+        local floor=Instance.new('Part',folder); floor.Size=Vector3.new(RADIUS*2,2,RADIUS*2)
+        floor.CFrame=CFrame.new(0,DOMAIN_Y,0); floor.Anchored=true; floor.Color=Color3.new(0,0,0); Instance.new('CylinderMesh',floor)
+        Root.CFrame=CFrame.new(0,DOMAIN_Y+5,0)
+        task.spawn(function()
+            local ok2,ob2=pcall(game.GetObjects,game,'rbxassetid://16639433873')
+            if ok2 and ob2 and ob2[1] then local m=ob2[1]; m.Parent=folder; for _, v in pairs(m:GetDescendants()) do if v:IsA('BasePart') then v.Anchored=true end end end
+        end)
+        task.wait(1); tmS:AdjustSpeed(1)
+        local thS; pcall(function()
+            local tp='malevolent_theme.mp3'
+            if not isfile(tp) then writefile(tp,game:HttpGet('https://github.com/lolledg/Test/raw/refs/heads/main/malevolent.mp3')) end
+            thS=Instance.new('Sound',workspace); thS.SoundId=getcustomasset(tp); thS.Volume=0.5; thS.Looped=true; thS:Play()
+        end)
+        task.spawn(function()
+            while active do
+                local pos=Vector3.new(math.random(-RADIUS,RADIUS),DOMAIN_Y+math.random(2,RADIUS),math.random(-RADIUS,RADIUS))
+                SlashEffect(pos,Color3.fromRGB(180,0,50)); ShockwaveRing(pos,Color3.fromRGB(100,0,0),math.random(5,15),0.3); task.wait(0.15)
+            end
+        end)
+        task.spawn(function()
+            while active do
+                local s=Instance.new('Sound',workspace); s.SoundId='rbxassetid://935843979'; s.PlaybackSpeed=2; s.Volume=1.5; s:Play(); Debris:AddItem(s,0.5); task.wait(0.15)
+            end
+        end)
+        task.delay(25,function()
+            active=false
+            if folder and folder.Parent then folder:Destroy() end
+            if thS then thS:Destroy() end; if sndA then sndA:Destroy() end
+            TweenLighting({FogEnd=savedFE,FogColor=savedFC,Ambient=savedAmb},1); Root.CFrame=posOrig
+        end)
+    end)
+
+end
+
+-- ════════════════════════════════════════════════
+-- INIT
+-- ════════════════════════════════════════════════
+
+CreateGUI()
+ToolSSs()
+
+LP.CharacterAdded:Connect(function(char)
+    char:WaitForChild('FULLY_LOADED_CHAR', 30)
+    u19=nil; u20=false; u21=nil; u22={}; u23=nil
+    isClientside=false; csVictim=nil
+    if csConn then csConn:Disconnect(); csConn=nil end
+    ToolSSs()
+end)
